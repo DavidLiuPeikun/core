@@ -256,9 +256,172 @@ print "build_path = $build_path \n";
 print "aclocal = $aclocal \n";
 print "aclocal_flags = $aclocal_flags \n";
 
-system ("$aclocal $aclocal_flags") && die "Failed to run aclocal";
-
+#system ("$aclocal $aclocal_flags") && die "Failed to run aclocal";
 #remove configure 
-unlink ("configure");
-# system ("$autoconf -I ${src_path}") && die "Failed to run autoconf";
-# die "Failed to generate the configure script" if (! -f "configure");
+#unlink ("configure");
+
+#system ("$autoconf -I ${src_path}") && die "Failed to run autoconf";
+
+#die "Failed to generate the configure script" if (! -f "configure");
+
+
+# Handle help arguments first, so we don't clobber autogen.lastrun
+for my $arg (@ARGV) {
+    if ($arg =~ /^(--help|-h|-\?)$/) {
+        print "handle help arg \n";
+        print STDOUT "autogen.sh - libreoffice configuration helper\n";
+        print STDOUT "   --with-distro  use a config from distro-configs/\n";
+        print STDOUT "                  the name needs to be passed without extension\n";
+        print STDOUT "   --best-effort  don't fail on un-known configure with/enable options\n";
+        print STDOUT "\nOther arguments passed directly to configure:\n\n";
+        system ("./configure --help");
+        exit;
+    }
+}
+
+
+my @cmdline_args = ();
+
+my $input = "autogen.input";
+my $lastrun = "autogen.lastrun";
+
+print "ARGV = @ARGV \n";
+
+if (!@ARGV) {
+    print "!ARGV = !@ARGV \n";
+    if (-f $input) {
+        print "input = $input \n";
+        if (-f $lastrun) {
+            print "lastrun = $lastrun \n";
+            print STDERR <<WARNING;
+********************************************************************
+*
+*   Reading $input and ignoring $lastrun!
+*   Consider removing $lastrun to get rid of this warning.
+*
+********************************************************************
+WARNING
+        }
+        @cmdline_args = read_args ($input);
+    } elsif (-f $lastrun) {
+        print STDERR "Reading $lastrun. Please rename it to $input to avoid this message.\n";
+        @cmdline_args = read_args ($lastrun);
+         print "cmdline_args elseif last.run =  @cmdline_args \n";
+    }
+} else {
+    if (-f $input) {
+        print STDERR <<WARNING;
+********************************************************************
+*
+*   Using commandline arguments and ignoring $input!
+*
+********************************************************************
+WARNING
+    }
+    
+    @cmdline_args = @ARGV;
+    print "cmdline_args =  @cmdline_args \n";
+}
+
+my @args;
+my $default_config = "$src_path/distro-configs/default.conf";
+my $option_checking = 'fatal';
+
+if (-f $default_config) {
+    print STDERR "Reading default config file: $default_config.\n";
+    push @args, read_args ($default_config);
+}
+
+print "cmdline_args =  @cmdline_args \n";
+for my $arg (@cmdline_args) {
+    if ($arg =~ m/--with-distro=(.*)$/) {
+        my $config = "$src_path/distro-configs/$1.conf";
+        if (! -f $config) {
+            invalid_distro ($config, $1);
+        }
+        push @args, read_args ($config);
+    } elsif ($arg =~ m/--best-effort$/) {
+        $option_checking = 'warn';
+    } else {
+        print "arg =  $arg \n";
+        push @args, $arg;
+    }
+}
+
+print "args =  @args \n";
+
+if (defined $ENV{NOCONFIGURE}) {
+    print "Skipping configure process.";
+} else {
+    #Save autogen.lastrun only if we did get some arguments on the command-line
+    print "input = $input \n";
+    print "ARGV =  @ARGV \n";
+
+    if (! -f $input && @ARGV) {
+        print "row361 \n";
+        if (scalar(@cmdline_args) > 0) {
+            # if there's already an autogen.lastrun, make a backup first
+            if (-e $lastrun) {
+                open (my $fh, $lastrun) || warn "Can't open $lastrun.\n";
+                open (BAK, ">$lastrun.bak") || warn "Can't create backup file $lastrun.bak.\n";
+                while (<$fh>) {
+                    print BAK;
+                }
+                close (BAK) && close ($fh);
+            }
+            # print "Saving command-line args to $lastrun\n";
+            my $fh;
+            open ($fh, ">autogen.lastrun") || die "Can't open autogen.lastrun: $!";
+            for my $arg (@cmdline_args) {
+                print $fh "$arg\n";
+            }
+            close ($fh);
+        }
+    }
+
+    push @args, "--srcdir=$src_path";
+    push @args, "--enable-option-checking=$option_checking";
+
+    print "args =  @args \n";
+
+    # When running a shell script from Perl on WSL, weirdly named
+    # environment variables like the "ProgramFiles(x86)" one don't get
+    # imported by the shell. So export it as PROGRAMFILESX86 instead.
+    my $building_for_linux = 0;
+    my $building_with_emscripten = 0;
+    foreach my $arg (@args) {
+        $building_for_linux = 1 if ($arg =~ /--host=x86_64.*linux/);
+        $building_with_emscripten = 1 if ($arg =~ /^--host=wasm.*-emscripten$/);
+    }
+
+    print "building_for_linux =  $building_for_linux \n";
+    print "building_with_emscripten =  $building_with_emscripten \n";
+
+    unshift @args, "./configure";
+    unshift @args, "emconfigure" if ($building_with_emscripten);
+
+    print "args =  @args \n";
+
+    print "Running '" . join (" ", @args), "'\n";
+
+    if (`wslsys 2>/dev/null` ne "" && !$building_for_linux) {
+        print "after wslsys \n";
+        if (!$ENV{"ProgramFiles(x86)"}) {
+            print STDERR "To build for Windows on WSL, you need to set the WSLENV environment variable in the Control Panel to 'ProgramFiles(x86)'\n";
+            print STDERR "If you actually do want to build for WSL (Linux) on WSL, pass a --host=x86_64-pc-linux-gnu option\n";
+            exit (1);
+        }
+        $ENV{"PROGRAMFILESX86"} = $ENV{"ProgramFiles(x86)"};
+    }
+    
+    # './configure --with-external-tar=/cygdrive/f/githubrepository/libreoffice/core/external 
+    #--with-junit=/cygdrive/f/githubrepository/libreoffice/core-buildtools/junit-4.10.jar 
+    #--with-jdk-home=/cygdrive/f/githubrepository/libreoffice/core-buildtools/jdk11 
+    #--with-ant-home=/cygdrive/f/githubrepository/libreoffice/core-buildtools/apache-ant-1.9.5 
+    #--enable-pch --disable-ccache --enable-debug --srcdir=/cygdrive/f/githubrepository/libreoffice/core 
+    #--enable-option-checking=fatal'
+
+
+    system (@args) && die "Error running configure";
+    
+}
