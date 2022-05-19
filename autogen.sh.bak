@@ -1,4 +1,4 @@
-:
+
 #
 # This script checks various configure parameters and uses three files:
 #   * autogen.input (ro)
@@ -12,7 +12,7 @@
 #   Write autogen.lastrun with new commandline args
 #
 # Run configure with checked args
-# $@:表示所有参数
+#
     eval 'exec perl -S $0 ${1+"$@"}'
         if 0;
 
